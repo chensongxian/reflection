@@ -1,12 +1,12 @@
 package com.csx;
 
 import com.csx.invoker.Invoker;
+import com.csx.property.PropertyNamer;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
+import java.util.function.BiFunction;
 
 /**
  * Created with IntelliJ IDEA.
@@ -101,7 +101,62 @@ public class Reflector {
 
     private void addGetMethods(Class<?> cls) {
         Map<String, List<Method>> conflictingGetters = new HashMap<>();
-        Method[] methods = null;
+        Method[] methods = getClassMethods(cls);
+        for (Method method : methods) {
+            // 方法参数大于0时，表明不是get方法
+            if (method.getParameters().length > 0) {
+                continue;
+            }
+            // 判断是不是以get或is开头的方法
+            String name = method.getName();
+            boolean isGetMethod = (name.startsWith("get") && name.length() > 3) || (name.startsWith("is") && name.length() > 2);
+            if (isGetMethod) {
+                name = PropertyNamer.methodToProperty(name);
+                addMethodConflict(conflictingGetters, name, method);
+
+            }
+        }
+    }
+
+    private void resolveSetterConflicts(Map<String, List<Method>> conflictingGetters) {
+        for (String propName : conflictingGetters.keySet()) {
+            List<Method> setters = conflictingGetters.get(propName);
+            Class<?> getterType = getTypes.get(propName);
+
+            Method match = null;
+            ReflectionException exception = null;
+            for (Method setter : setters) {
+                Class<?> paramType = setter.getParameterTypes()[0];
+                if (paramType.equals(getterType)) {
+                    match = setter;
+                    break;
+                }
+
+                if (exception == null) {
+                    try {
+                        match = pickBetterSetter(match, setter, propName);
+                    } catch (ReflectionException e) {
+                        match = null;
+                        exception = e;
+                    }
+                }
+            }
+        }
+    }
+
+    private Method pickBetterSetter(Method setter1, Method setter2, String property) {
+        return null;
+    }
+
+    /**
+     * 利用Map对同一属性名的方法进行分组
+     * @param conflictingMethods
+     * @param name
+     * @param method
+     */
+    private void addMethodConflict(Map<String, List<Method>> conflictingMethods, String name, Method method) {
+        List<Method> list = conflictingMethods.computeIfAbsent(name, k -> new ArrayList<>());
+        list.add(method);
     }
 
     private Method[] getClassMethods(Class<?> cls) {
@@ -110,15 +165,31 @@ public class Reflector {
         // 循环类，类的父类，类的父类的父类，直到父类为object
         Class<?> currentClass = cls;
         while (currentClass != null && currentClass != Object.class) {
+            // <1> 记录当前类定义的方法
+            addUniqueMethods(uniqueMethods, cls.getDeclaredMethods());
+            // <2> 记录接口中定义的方法
+            Class<?>[] interfaces = currentClass.getInterfaces();
+            for (Class<?> anInterface : interfaces) {
+                addUniqueMethods(uniqueMethods, anInterface.getDeclaredMethods());
+            }
 
+            // 获得父类
+            currentClass = currentClass.getSuperclass();
         }
-        return null;
+        // 转换成method数组返回
+        Collection<Method> methods = uniqueMethods.values();
+        return methods.toArray(new Method[methods.size()]);
     }
 
     private void addUniqueMethods(Map<String, Method> uniqueMethods, Method[] methods) {
         for (Method currentMethod : methods) {
             if (!currentMethod.isBridge()) {
+                // 获取方法签名
+                String signature = getSignature(currentMethod);
 
+                if (!uniqueMethods.containsKey(signature)) {
+                    uniqueMethods.put(signature, currentMethod);
+                }
             }
         }
     }
@@ -145,8 +216,9 @@ public class Reflector {
             } else {
                 sb.append(',');
             }
+            sb.append(parameters[i].getName());
         }
-        return "";
+        return sb.toString();
     }
 
 
